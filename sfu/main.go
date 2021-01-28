@@ -248,10 +248,14 @@ func (c *Client) peerConnectionFactory() {
 
 				for _, pkt := range pkts {
 					switch pkt.(type) {
-					case *rtcp.SenderReport:
-						c.handleSR(pkt.(*rtcp.SenderReport))
 					case *rtcp.SourceDescription:
 						c.handleSDES(pkt.(*rtcp.SourceDescription))
+					case *rtcp.SenderReport:
+						c.handleSR(pkt.(*rtcp.SenderReport))
+					case *rtcp.ReceiverReport:
+						c.handleRR(pkt.(*rtcp.ReceiverReport))
+					case *rtcp.Goodbye:
+						c.handleBye(pkt.(*rtcp.Goodbye))
 					default:
 						log.Println("unknown RTCP Type:", pkt)
 					}
@@ -357,6 +361,19 @@ func (s *stream) SetSenderReportData(rtpTime uint32, ntpTime uint64) {
 	s.Unlock()
 }
 
+func (c *Client) handleRR(rr *rtcp.ReceiverReport) {
+	rr.String()
+	for _, r := range rr.Reports {
+		log.Println(r.SSRC)
+		log.Println(r.FractionLost)
+		log.Println(r.TotalLost)
+		log.Println(r.LastSequenceNumber)
+		log.Println(r.Jitter)
+		log.Println(r.LastSenderReport)
+		log.Println(r.Delay)
+	}
+}
+
 func (c *Client) handleSDES(sdes *rtcp.SourceDescription) {
 	for _, chunk := range sdes.Chunks {
 		for _, item := range chunk.Items {
@@ -367,6 +384,12 @@ func (c *Client) handleSDES(sdes *rtcp.SourceDescription) {
 				s.cname = item.Text
 			}
 		}
+	}
+}
+
+func (c *Client) handleBye(bye *rtcp.Goodbye) {
+	for _, src := range bye.Sources {
+		log.Printf("BYE: ssrc:%d reason:%s", src, bye.Reason)
 	}
 }
 
