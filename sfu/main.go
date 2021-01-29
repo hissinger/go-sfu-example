@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +17,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -63,6 +68,8 @@ type Client struct {
 	peerConnection *webrtc.PeerConnection
 
 	receiveStreams map[uint32]*stream
+	ctx            context.Context
+	ctxCancel      context.CancelFunc
 }
 
 type ICECandidate struct {
@@ -73,6 +80,7 @@ type ICECandidate struct {
 func (c *Client) readPump() {
 	defer func() {
 		c.conn.Close()
+		log.Info("exit readPump goroutine")
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
 	for {
@@ -81,6 +89,7 @@ func (c *Client) readPump() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Errorf("error: %v", err)
 			}
+			c.Close()
 			break
 		}
 
@@ -102,9 +111,15 @@ func (c *Client) readPump() {
 	}
 }
 
+func (c *Client) Close() {
+	c.peerConnection.Close()
+	c.ctxCancel()
+}
+
 func (c *Client) writePump() {
 	defer func() {
 		c.conn.Close()
+		log.Info("exit writePump goroutine")
 	}()
 	for {
 		select {
@@ -223,27 +238,50 @@ func (c *Client) peerConnectionFactory() {
 		c.receiveStreams[ssrc] = stream
 
 		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer func() {
+				ticker.Stop()
+				log.Info("exit bitrate goroutine")
+			}()
+
 			for {
-				log.Debug("bps:", stream.bitrate)
-				stream.bitrate = 0
-				time.Sleep(time.Second * 1)
+				select {
+				case <-c.ctx.Done():
+					return
+				case <-ticker.C:
+					log.Debug("bps:", stream.bitrate)
+					stream.bitrate = 0
+				}
 			}
 		}()
 
 		go func() {
-			for {
-				time.Sleep(time.Second * 1)
-				rtcp := []rtcp.Packet{c.buildREMBPacket()}
-				pc.WriteRTCP(rtcp)
+			ticker := time.NewTicker(1 * time.Second)
+			defer func() {
+				ticker.Stop()
+				log.Info("exit WriteRTCP goroutine")
+			}()
 
+			for {
+				select {
+				case <-c.ctx.Done():
+					return
+				case <-ticker.C:
+					rtcp := []rtcp.Packet{c.buildREMBPacket()}
+					pc.WriteRTCP(rtcp)
+				}
 			}
 		}()
 
 		go func() {
+			defer func() {
+				log.Info("exit readRTCP goroutine")
+			}()
 			for {
-				pkts, _, err := receiver.ReadRTCP()
-				if err != nil {
-					log.Fatalln(err)
+				pkts, _, readErr := receiver.ReadRTCP()
+				if readErr != nil {
+					log.Warn("read RTCP:", readErr)
+					return
 				}
 
 				for _, pkt := range pkts {
@@ -264,11 +302,15 @@ func (c *Client) peerConnectionFactory() {
 		}()
 
 		go func() {
-			pkt := make([]byte, 1400)
+			defer func() {
+				log.Info("exit readRTP goroutine")
+			}()
+			pkt := make([]byte, 1500)
 			for {
 				i, _, readErr := remoteTrack.Read(pkt)
 				if readErr != nil {
-					log.Fatalln(readErr)
+					log.Warn("read RTP:", readErr)
+					return
 				}
 				arrivalTime := time.Now().UnixNano()
 
@@ -362,7 +404,6 @@ func (s *stream) SetSenderReportData(rtpTime uint32, ntpTime uint64) {
 }
 
 func (c *Client) handleRR(rr *rtcp.ReceiverReport) {
-	rr.String()
 	for _, r := range rr.Reports {
 		log.Println(r.SSRC)
 		log.Println(r.FractionLost)
@@ -462,6 +503,8 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 		receiveStreams: map[uint32]*stream{},
 	}
 
+	client.ctx, client.ctxCancel = context.WithCancel(context.Background())
+
 	client.peerConnectionFactory()
 
 	go client.writePump()
@@ -472,8 +515,20 @@ var m *webrtc.MediaEngine
 
 func main() {
 
+	// setting logrus
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
+	log.SetReportCaller(true)
+	formatter := &logrus.TextFormatter{
+		CallerPrettyfier: func(f *runtime.Frame) (string, string) {
+			filename := filepath.Base(f.File)
+			return "", fmt.Sprint(" ", filename, ":", f.Line)
+		},
+		TimestampFormat: "20060102-150405.000000",
+		FullTimestamp:   true,
+		ForceColors:     true,
+	}
+	log.SetFormatter(formatter)
 
 	m = &webrtc.MediaEngine{}
 	m.RegisterDefaultCodecs()
