@@ -35,6 +35,10 @@ const RoomComponent = (props) => {
           },
         ],
       },
+      offerConstraints: {
+        offerToReceiveAudio: false,
+        offerToReceiveVideo: false,
+      },
       stream: stream,
     });
 
@@ -53,7 +57,7 @@ const RoomComponent = (props) => {
   return (
     <div>
       <video playsInline muted ref={userVideoRef} autoPlay />
-      <button onClick={handleClick}>JOIN</button>
+      <button onClick={handleClick}>PUBLISH</button>
     </div>
   );
 };

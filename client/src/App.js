@@ -1,10 +1,12 @@
 import "./App.css";
-import RoomComponent from "./RoomComponent.js";
+import PublishComponent from "./PublishComponent.js";
+import SubscribeComponent from "./SubscribeComponent.js";
 
 function App() {
   return (
     <div className="App">
-      <RoomComponent />
+      <PublishComponent />
+      <SubscribeComponent />
     </div>
   );
 }
