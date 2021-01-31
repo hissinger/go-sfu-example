@@ -123,6 +123,8 @@ func (c *Client) writePump() {
 	}()
 	for {
 		select {
+		case <-c.ctx.Done():
+			return
 		case message, ok := <-c.send:
 			if !ok {
 				// The hub closed the channel.
